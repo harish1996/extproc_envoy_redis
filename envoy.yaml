@@ -1,0 +1,133 @@
+################################################################################
+# Envoy configuration for ext_proc-based Redis cache lookup.
+#
+# Flow:
+#   Client → Listener (10000) → HCM → ext_proc filter → [cache hit?]
+#                                                         YES → immediate response (cached body)
+#                                                         NO  → route to upstream cluster
+#
+# The ext_proc filter is configured to only process RequestHeaders, which is
+# the minimum needed to inspect :path and issue an immediate response.
+################################################################################
+static_resources:
+
+  listeners:
+    - name: main_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10000
+
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        json_format:
+                          ts: "%START_TIME%"
+                          method: "%REQ(:METHOD)%"
+                          path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+                          status: "%RESPONSE_CODE%"
+                          x_cache: "%RESP(X-CACHE)%"
+                          duration_ms: "%DURATION%"
+                          upstream: "%UPSTREAM_HOST%"
+
+                http_filters:
+                  # ── ext_proc filter ──────────────────────────────────────────
+                  - name: envoy.filters.http.ext_proc
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+
+                      # Address of your ext_proc gRPC server.
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: ext_proc_cluster
+                        timeout: 2s   # per-message deadline; keeps latency bounded
+
+                      # Only ask ext_proc about request headers.
+                      # We don't need to see request body or response phases.
+                      processing_mode:
+                        request_header_mode: SEND        # ← our hook
+                        response_header_mode: SKIP
+                        request_body_mode: NONE
+                        response_body_mode: NONE
+                        request_trailer_mode: SKIP
+                        response_trailer_mode: SKIP
+
+                      # IMPORTANT: if the ext_proc server is unreachable or returns
+                      # an error, fail open (pass the request through) rather than
+                      # returning a 500. Adjust to false if you want fail-closed.
+                      failure_mode_allow: true
+
+                      # Keep the gRPC stream alive between requests on the same
+                      # HTTP/2 connection (reduces overhead).
+                      message_timeout: 2s
+
+                  # ── router (must be last) ────────────────────────────────────
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: upstream_cluster
+                            # Optional: strip the leading slash before forwarding
+                            # to the upstream so upstream sees bare paths.
+                            # prefix_rewrite: "/"
+
+  clusters:
+    # ── ext_proc gRPC server ─────────────────────────────────────────────────
+    - name: ext_proc_cluster
+      type: STATIC
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}   # ext_proc requires HTTP/2 / gRPC
+      load_assignment:
+        cluster_name: ext_proc_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1   # change if ext_proc runs elsewhere
+                      port_value: 50051
+      connect_timeout: 1s
+      circuit_breakers:
+        thresholds:
+          - max_connections: 100
+            max_pending_requests: 1000
+
+    # ── your real upstream ───────────────────────────────────────────────────
+    - name: upstream_cluster
+      type: STATIC
+      load_assignment:
+        cluster_name: upstream_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1   # change to your backend address
+                      port_value: 8080
+      connect_timeout: 5s
+
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
