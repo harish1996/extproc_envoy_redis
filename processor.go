@@ -6,12 +6,12 @@
 //  3. GET from Redis:
 //     - MISS  → HeadersResponse{CONTINUE}, Envoy forwards to upstream normally.
 //     - HIT   → ImmediateResponse{200, body=value}, Envoy short-circuits the request.
-//               EXPIRE is issued asynchronously to refresh the TTL.
+//     EXPIRE is issued asynchronously to refresh the TTL.
 //
 // processing_mode in envoy.yaml is set to only SEND request headers, so in
 // practice we will never receive RequestBody / ResponseHeaders / etc. messages.
 // The default branch handles them defensively anyway.
-package processor
+package main
 
 import (
 	"context"
@@ -167,6 +167,10 @@ func (p *Processor) buildResponse(ctx context.Context, req *pb.ProcessingRequest
 func (p *Processor) handleRequestHeaders(ctx context.Context, reqHeaders *pb.HttpHeaders) (*pb.ProcessingResponse, error) {
 	path := extractHeader(reqHeaders, ":path")
 	method := extractHeader(reqHeaders, ":method")
+	allHeaders := reqHeaders.GetHeaders()
+	for _, h := range allHeaders.Headers {
+		slog.Debug("request header", "key", h.Key, "value", string(h.RawValue))
+	}
 
 	if path == "" {
 		slog.Warn("request has no :path header, passing through")
@@ -217,7 +221,7 @@ func extractHeader(hdrs *pb.HttpHeaders, name string) string {
 	}
 	for _, h := range hdrs.Headers.Headers {
 		if h.Key == name {
-			return h.Value
+			return string(h.RawValue)
 		}
 	}
 	return ""

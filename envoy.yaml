@@ -91,7 +91,7 @@ static_resources:
   clusters:
     # ── ext_proc gRPC server ─────────────────────────────────────────────────
     - name: ext_proc_cluster
-      type: STATIC
+      type: STRICT_DNS
       typed_extension_protocol_options:
         envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
           "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
@@ -104,7 +104,7 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: 127.0.0.1   # change if ext_proc runs elsewhere
+                      address: extproc # change if ext_proc runs elsewhere
                       port_value: 50051
       connect_timeout: 1s
       circuit_breakers:
@@ -114,7 +114,7 @@ static_resources:
 
     # ── your real upstream ───────────────────────────────────────────────────
     - name: upstream_cluster
-      type: STATIC
+      type: STRICT_DNS
       load_assignment:
         cluster_name: upstream_cluster
         endpoints:
@@ -122,8 +122,8 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: 127.0.0.1   # change to your backend address
-                      port_value: 8080
+                      address: upstream   # change to your backend address
+                      port_value: 80
       connect_timeout: 5s
 
 admin:

@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"extproc-redis/internal/processor"
 	pb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -45,7 +44,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
-	proc, err := processor.New(processor.Config{
+	proc, err := New(Config{
 		RedisAddr:     *redisAddr,
 		RedisPassword: *redisPass,
 		RedisDB:       *redisDB,
